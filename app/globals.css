@@ -16,3 +16,34 @@
 .recordActions { display: flex; align-items: center; gap: 12px; }
 .recordActions button { background: rgba(255,255,255,.08); padding: 8px 12px; color: #d8d8d8; }
 @media (max-width: 850px) { .depositInputGrid { grid-template-columns: 1fr; } .depositNote { grid-template-columns: 1fr; } .depositNote small { text-align: left; } .recordActions { align-items: flex-end; flex-direction: column; } }
+
+.backupRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.ghostSmall {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.05);
+  color: #f8fafc;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.fileLabel input {
+  display: none;
+}
+
+.apiStatus small,
+.depositNote small,
+.calcLine {
+  line-height: 1.6;
+}

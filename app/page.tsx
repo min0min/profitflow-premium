@@ -77,6 +77,7 @@ export default function Page() {
   const [journal, setJournal] = useState('')
   const [manualDeposits, setManualDeposits] = useState<DepositRecord[]>(depositRecords)
   const [depositDrafts, setDepositDrafts] = useState<ManualDepositDraft>(defaultDepositDrafts)
+  const [hydrated, setHydrated] = useState(false)
 
   const fetchBitget = async () => {
     try {
@@ -105,25 +106,54 @@ export default function Page() {
   }
 
   useEffect(() => {
-    const savedManual = window.localStorage.getItem('profitflow-manual')
-    const savedJournal = window.localStorage.getItem('profitflow-journal')
-    const savedDeposits = window.localStorage.getItem('profitflow-manual-deposits')
-    if (savedManual) setManual(JSON.parse(savedManual))
-    if (savedJournal) setJournal(savedJournal)
-    if (savedDeposits) setManualDeposits(JSON.parse(savedDeposits))
+    try {
+      const savedManual = window.localStorage.getItem('profitflow-manual-v7') || window.localStorage.getItem('profitflow-manual')
+      const savedJournal = window.localStorage.getItem('profitflow-journal-v7') || window.localStorage.getItem('profitflow-journal')
+      const savedDeposits = window.localStorage.getItem('profitflow-manual-deposits-v7') || window.localStorage.getItem('profitflow-manual-deposits')
+      if (savedManual) setManual(JSON.parse(savedManual))
+      if (savedJournal) setJournal(savedJournal)
+      if (savedDeposits) setManualDeposits(JSON.parse(savedDeposits))
+    } catch (error) {
+      console.warn('저장 데이터 복구 실패', error)
+    } finally {
+      setHydrated(true)
+    }
     fetchBitget()
   }, [])
 
+  useEffect(() => {
+    if (!hydrated) return
+    window.localStorage.setItem('profitflow-manual-v7', JSON.stringify(manual))
+  }, [manual, hydrated])
+
+  useEffect(() => {
+    if (!hydrated) return
+    window.localStorage.setItem('profitflow-journal-v7', journal)
+  }, [journal, hydrated])
+
+  useEffect(() => {
+    if (!hydrated) return
+    window.localStorage.setItem('profitflow-manual-deposits-v7', JSON.stringify(manualDeposits))
+  }, [manualDeposits, hydrated])
+
+  const depositAdjustments = useMemo(() => {
+    return manualDeposits.reduce<Record<'bitget' | 'mt5' | 'orangex', number>>((acc, row) => {
+      acc[row.exchange] += row.amount
+      return acc
+    }, { bitget: 0, mt5: 0, orangex: 0 })
+  }, [manualDeposits])
+
   const accounts = useMemo<Account[]>(() => {
     return baseAccounts.map((a) => {
-      if (a.key === 'bitget') return { ...a, asset: bitget.asset ?? a.asset }
+      const depositAdjustment = depositAdjustments[a.key]
+      if (a.key === 'bitget') return { ...a, asset: (bitget.asset ?? a.asset) + depositAdjustment }
       if (a.key === 'mt5' || a.key === 'orangex') {
         const m = manual[a.key]
-        return { ...a, asset: toNum(m.asset, a.asset), today: toNum(m.today, a.today), month: toNum(m.month, a.month), winRate: toNum(m.winRate, a.winRate), trades: toNum(m.trades, a.trades) }
+        return { ...a, asset: toNum(m.asset, a.asset) + depositAdjustment, today: toNum(m.today, a.today), month: toNum(m.month, a.month), winRate: toNum(m.winRate, a.winRate), trades: toNum(m.trades, a.trades) }
       }
       return a
     })
-  }, [manual, bitget.asset])
+  }, [manual, bitget.asset, depositAdjustments])
 
   const selectedAccounts = selected === 'all' ? accounts : accounts.filter((a) => a.key === selected)
   const totalAsset = selectedAccounts.reduce((s, a) => s + a.asset, 0)
@@ -145,13 +175,13 @@ export default function Page() {
   }, [selected, manual, bitget.status, bitget.positions.length, bitget.fills.length])
 
   const saveManual = () => {
-    window.localStorage.setItem('profitflow-manual', JSON.stringify(manual))
-    window.localStorage.setItem('profitflow-manual-deposits', JSON.stringify(manualDeposits))
+    window.localStorage.setItem('profitflow-manual-v7', JSON.stringify(manual))
+    window.localStorage.setItem('profitflow-manual-deposits-v7', JSON.stringify(manualDeposits))
     alert('수동 계좌 입력값 저장 완료')
   }
 
   const saveJournal = () => {
-    window.localStorage.setItem('profitflow-journal', journal)
+    window.localStorage.setItem('profitflow-journal-v7', journal)
     alert('매매일지 저장 완료')
   }
 
@@ -171,14 +201,39 @@ export default function Page() {
     }
     const next = [row, ...manualDeposits]
     setManualDeposits(next)
-    window.localStorage.setItem('profitflow-manual-deposits', JSON.stringify(next))
+    window.localStorage.setItem('profitflow-manual-deposits-v7', JSON.stringify(next))
     setDepositDrafts({ ...depositDrafts, [exchange]: { ...defaultDepositDrafts[exchange] } })
   }
 
   const removeManualDeposit = (index: number) => {
     const next = manualDeposits.filter((_, i) => i !== index)
     setManualDeposits(next)
-    window.localStorage.setItem('profitflow-manual-deposits', JSON.stringify(next))
+    window.localStorage.setItem('profitflow-manual-deposits-v7', JSON.stringify(next))
+  }
+
+  const exportBackup = () => {
+    const backup = { manual, manualDeposits, journal, savedAt: new Date().toISOString() }
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `profitflow-backup-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const importBackup = async (file: File | null) => {
+    if (!file) return
+    try {
+      const text = await file.text()
+      const backup = JSON.parse(text)
+      if (backup.manual) setManual(backup.manual)
+      if (backup.manualDeposits) setManualDeposits(backup.manualDeposits)
+      if (typeof backup.journal === 'string') setJournal(backup.journal)
+      alert('백업 복구 완료')
+    } catch {
+      alert('백업 파일을 읽지 못했습니다')
+    }
   }
 
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -256,13 +311,13 @@ export default function Page() {
       </section>
 
       <section className="accounts" id="accounts">
-        {selectedAccounts.map((a) => <div className="account glass" key={a.key}><div><p>{a.ko}</p><h3>{money(a.asset)}</h3></div><span className={a.today >= 0 ? 'green' : 'red'}>{signed(a.today)} · {pct(a.today, a.asset)}</span><small>{a.mode === 'api' ? bitget.status : '수동 입력 계좌'} · 월간 {signed(a.month)} · {pct(a.month, a.asset)} · 승률 {a.winRate}%</small></div>)}
+        {selectedAccounts.map((a) => <div className="account glass" key={a.key}><div><p>{a.ko}</p><h3>{money(a.asset)}</h3></div><span className={a.today >= 0 ? 'green' : 'red'}>{signed(a.today)} · {pct(a.today, a.asset)}</span><small>{a.mode === 'api' ? bitget.status : '수동 입력 계좌'} · 입출금 반영 {signed(depositAdjustments[a.key])} · 월간 {signed(a.month)} · {pct(a.month, a.asset)} · 승률 {a.winRate}%</small></div>)}
       </section>
 
       <section className="grid second" id="connect">
         <div className="panel glass connectBox">
           <div className="panelHead"><div><p>BITGET API</p><h2>비트겟 API 연결</h2></div><span className="badge">{bitget.status}</span></div>
-          <div className="apiStatus"><b>{bitget.asset !== null ? money(bitget.asset) : '자산 대기중'}</b><p>{bitget.message}</p></div>
+          <div className="apiStatus"><b>{bitget.asset !== null ? money(bitget.asset + depositAdjustments.bitget) : '자산 대기중'}</b><p>{bitget.message}</p><small>API 자산 {bitget.asset !== null ? money(bitget.asset) : '-'} · 수동 입출금 반영 {signed(depositAdjustments.bitget)}</small></div>
           <button onClick={fetchBitget}>비트겟 자산/포지션/체결 새로고침</button>
           <small>API Key는 화면에 입력하지 않습니다. Vercel 환경변수에 저장된 키로 서버에서만 조회합니다.</small>
         </div>
@@ -280,7 +335,7 @@ export default function Page() {
                 <input placeholder="월간 손익" value={manual[k].month} onChange={(e) => setManual({...manual, [k]: {...manual[k], month: e.target.value}})} />
                 <input placeholder="승률" value={manual[k].winRate} onChange={(e) => setManual({...manual, [k]: {...manual[k], winRate: e.target.value}})} />
               </div>
-              <div className="calcLine">오늘 수익률 {pct(todayPnl, asset)} · 월간 수익률 {pct(monthPnl, asset)}</div>
+              <div className="calcLine">입출금 반영 전 기준 {money(asset)} · 반영 후 {money(asset + depositAdjustments[k])} · 오늘 수익률 {pct(todayPnl, asset + depositAdjustments[k])} · 월간 수익률 {pct(monthPnl, asset + depositAdjustments[k])}</div>
             </div>
           })}
           <button onClick={saveManual}>수동 입력 저장</button>
@@ -307,7 +362,7 @@ export default function Page() {
       <section className="grid second records">
         <div className="panel glass depositPanel">
           <div className="panelHead"><div><p>DEPOSIT / WITHDRAWAL</p><h2>입출금 관리</h2></div><span className="badge">ALL MANUAL</span></div>
-          <div className="depositNote"><b>입출금은 전부 수동 기록</b><span>API 영향 없음</span><small>비트겟도 출금 권한 없이 안전하게 운용하기 위해 수동 기록으로 관리합니다.</small></div>
+          <div className="depositNote"><b>입출금은 전부 수동 기록</b><span>자산 자동 반영</span><small>입금은 선택 계좌 자산에 더하고, 출금은 선택 계좌 자산에서 차감합니다. 저장은 브라우저 localStorage에 자동 저장됩니다.</small></div>
 
           <div className="manualDepositWrap">
             {(['bitget','mt5','orangex'] as const).map((exchange) => <div className="manualDeposit" key={exchange}>
@@ -331,7 +386,8 @@ export default function Page() {
           <div className="panelHead"><div><p>TRADING JOURNAL</p><h2>매매일지 메모</h2></div><span className="badge">LOCAL SAVE</span></div>
           <textarea value={journal} onChange={(e) => setJournal(e.target.value)} placeholder="예: 오늘 BTC 롱은 진입 근거는 좋았지만, 추가진입 간격이 좁았다. 다음에는 4개 포지션 전 -8% 기준 확인." />
           <button onClick={saveJournal}>매매일지 저장</button>
-          <small>브라우저 localStorage에 저장됩니다. 나중에 Supabase 붙이면 계정별 영구 저장으로 바꿀 수 있습니다.</small>
+          <small>브라우저 localStorage에 자동 저장됩니다. 브라우저 변경/캐시삭제에 대비해서 백업 파일도 저장해두면 안전합니다.</small>
+          <div className="backupRow"><button className="ghostSmall" onClick={exportBackup}>백업 내보내기</button><label className="ghostSmall fileLabel">백업 불러오기<input type="file" accept="application/json" onChange={(e) => importBackup(e.target.files?.[0] ?? null)} /></label></div>
         </div>
       </section>
     </main>
