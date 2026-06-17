@@ -6,8 +6,7 @@ const BASE_URL = 'https://api.bitget.com'
 function sign(timestamp: string, method: string, requestPath: string, body = '') {
   const secret = process.env.BITGET_API_SECRET
   if (!secret) throw new Error('BITGET_API_SECRET is missing')
-  const prehash = timestamp + method.toUpperCase() + requestPath + body
-  return crypto.createHmac('sha256', secret).update(prehash).digest('base64')
+  return crypto.createHmac('sha256', secret).update(timestamp + method.toUpperCase() + requestPath + body).digest('base64')
 }
 
 async function bitgetGet(path: string, query: Record<string, string> = {}) {
@@ -33,15 +32,23 @@ async function bitgetGet(path: string, query: Record<string, string> = {}) {
     cache: 'no-store',
   })
 
-  const data = await res.json().catch(() => ({}))
+  const data = await res.json().catch(() => null)
   return { ok: res.ok, status: res.status, data }
 }
 
 export async function GET() {
   try {
     const accounts = await bitgetGet('/api/v2/mix/account/accounts', { productType: 'USDT-FUTURES' })
-    const positions = await bitgetGet('/api/v2/mix/position/all-position', { productType: 'USDT-FUTURES', marginCoin: 'USDT' })
-    const fills = await bitgetGet('/api/v2/mix/order/fills', { productType: 'USDT-FUTURES', limit: '20' })
+
+    const positions = await bitgetGet('/api/v2/mix/position/all-position', {
+      productType: 'USDT-FUTURES',
+      marginCoin: 'USDT',
+    }).catch((error) => ({ ok: false, status: 500, data: { msg: error instanceof Error ? error.message : 'positions error' } }))
+
+    const fills = await bitgetGet('/api/v2/mix/order/fills', {
+      productType: 'USDT-FUTURES',
+    }).catch((error) => ({ ok: false, status: 500, data: { msg: error instanceof Error ? error.message : 'fills error' } }))
+
     return NextResponse.json({ ok: true, source: 'bitget', accounts, positions, fills })
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 })

@@ -16,8 +16,8 @@
     "react": "latest",
     "react-dom": "latest",
     "recharts": "latest",
-    "@supabase/supabase-js": "^2.53.0",
-    "typescript": "latest"
+    "typescript": "latest",
+    "@supabase/supabase-js": "^2.53.0"
   },
   "devDependencies": {}
 }

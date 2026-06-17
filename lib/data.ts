@@ -13,6 +13,7 @@ export type Account = {
 }
 
 export type DepositRecord = {
+  id?: number
   exchange: Exclude<ExchangeKey, 'all'>
   type: '입금' | '출금'
   amount: number
