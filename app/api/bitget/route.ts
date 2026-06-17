@@ -39,22 +39,10 @@ async function bitgetGet(path: string, query: Record<string, string> = {}) {
 
 export async function GET() {
   try {
-    const endTime = Date.now()
-    const startTime = endTime - 1000 * 60 * 60 * 24 * 180
-    const walletQuery = {
-      coin: 'USDT',
-      startTime: String(startTime),
-      endTime: String(endTime),
-      limit: '50',
-    }
-
     const accounts = await bitgetGet('/api/v2/mix/account/accounts', { productType: 'USDT-FUTURES' })
     const positions = await bitgetGet('/api/v2/mix/position/all-position', { productType: 'USDT-FUTURES', marginCoin: 'USDT' })
     const fills = await bitgetGet('/api/v2/mix/order/fills', { productType: 'USDT-FUTURES', limit: '20' })
-    const deposits = await bitgetGet('/api/v2/spot/wallet/deposit-records', walletQuery)
-    const withdrawals = await bitgetGet('/api/v2/spot/wallet/withdrawal-records', walletQuery)
-
-    return NextResponse.json({ ok: true, source: 'bitget', accounts, positions, fills, deposits, withdrawals })
+    return NextResponse.json({ ok: true, source: 'bitget', accounts, positions, fills })
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 })
   }

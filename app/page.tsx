@@ -7,15 +7,13 @@ import { accounts as baseAccounts, bitgetTrades, daily, depositRecords, equity, 
 type Lang = 'ko' | 'en'
 type Period = '7D' | '30D' | '90D' | 'ALL'
 type ManualState = Record<'mt5' | 'orangex', { asset: string; today: string; month: string; winRate: string; trades: string }>
-type ManualDepositDraft = Record<'mt5' | 'orangex', { type: '입금' | '출금'; amount: string; time: string; memo: string }>
+type ManualDepositDraft = Record<'bitget' | 'mt5' | 'orangex', { type: '입금' | '출금'; amount: string; time: string; memo: string }>
 type BitgetState = {
   status: '연결 전' | '연결 중' | '연결 완료' | '연결 오류'
   asset: number | null
   message: string
   positions: any[]
   fills: any[]
-  transfers: DepositRecord[]
-  transferMessage: string
 }
 
 const money = (n: number) => `${n < 0 ? '-' : ''}$${Math.abs(Math.round(n)).toLocaleString()}`
@@ -37,11 +35,10 @@ const defaultBitget: BitgetState = {
   message: 'Vercel 환경변수 기반으로 조회합니다.',
   positions: [],
   fills: [],
-  transfers: [],
-  transferMessage: '비트겟 입출금은 API로 조회합니다.',
 }
 
 const defaultDepositDrafts: ManualDepositDraft = {
+  bitget: { type: '입금', amount: '', time: '', memo: '' },
   mt5: { type: '입금', amount: '', time: '', memo: '' },
   orangex: { type: '입금', amount: '', time: '', memo: '' },
 }
@@ -71,41 +68,6 @@ function readFills(payload: any) {
   return []
 }
 
-function parseBitgetTransferRows(payload: any, type: '입금' | '출금') {
-  const rows = payload?.data?.data
-  if (!Array.isArray(rows)) return []
-  return rows.map((r: any): DepositRecord => {
-    const rawAmount = toNum(r.size ?? r.amount ?? r.quantity, 0)
-    const signedAmount = type === '출금' ? -Math.abs(rawAmount) : Math.abs(rawAmount)
-    const timeValue = r.cTime || r.uTime || r.createTime || r.updateTime
-    const time = timeValue ? new Date(Number(timeValue)).toLocaleDateString('ko-KR') : '최근 기록'
-    const coin = r.coin ? `${r.coin} ` : ''
-    const status = r.status ? ` · ${r.status}` : ''
-    const chain = r.chain ? ` · ${r.chain}` : ''
-    return {
-      exchange: 'bitget',
-      type,
-      amount: signedAmount,
-      time,
-      memo: `${coin}${type}${status}${chain}`.trim(),
-    }
-  })
-}
-
-function readBitgetTransfers(payload: any) {
-  const depositOk = payload?.deposits?.ok && payload?.deposits?.data?.code === '00000'
-  const withdrawalOk = payload?.withdrawals?.ok && payload?.withdrawals?.data?.code === '00000'
-  const deposits = depositOk ? parseBitgetTransferRows(payload.deposits, '입금') : []
-  const withdrawals = withdrawalOk ? parseBitgetTransferRows(payload.withdrawals, '출금') : []
-  const rows = [...deposits, ...withdrawals]
-  const message = rows.length
-    ? `비트겟 API 입출금 ${rows.length}건 조회 완료`
-    : depositOk || withdrawalOk
-      ? '최근 180일 USDT 입출금 내역이 없습니다.'
-      : '비트겟 입출금 API 권한이 없거나 응답 오류입니다. 필요하면 API 권한에서 Wallet/Taxation 조회 권한을 확인하세요.'
-  return { rows, message }
-}
-
 export default function Page() {
   const [selected, setSelected] = useState<ExchangeKey>('all')
   const [lang, setLang] = useState<Lang>('ko')
@@ -118,30 +80,27 @@ export default function Page() {
 
   const fetchBitget = async () => {
     try {
-      setBitget((prev) => ({ ...prev, status: '연결 중', message: '비트겟 자산/포지션/체결/입출금을 불러오는 중입니다.' }))
+      setBitget((prev) => ({ ...prev, status: '연결 중', message: '비트겟 자산/포지션/체결을 불러오는 중입니다.' }))
       const res = await fetch('/api/bitget', { cache: 'no-store' })
       const payload = await res.json()
 
       if (!res.ok || !payload?.ok || !payload?.accounts?.ok) {
-        setBitget({ status: '연결 오류', asset: null, message: payload?.accounts?.data?.msg || payload?.error || 'Bitget API 응답 오류', positions: [], fills: [], transfers: [], transferMessage: '비트겟 입출금 조회 실패' })
+        setBitget({ status: '연결 오류', asset: null, message: payload?.accounts?.data?.msg || payload?.error || 'Bitget API 응답 오류', positions: [], fills: [] })
         return
       }
 
       const asset = readBitgetAsset(payload)
       const positions = readPositions(payload)
       const fills = readFills(payload)
-      const transfers = readBitgetTransfers(payload)
       setBitget({
         status: '연결 완료',
         asset,
         positions,
         fills,
-        transfers: transfers.rows,
-        transferMessage: transfers.message,
-        message: `비트겟 조회 완료 · 포지션 ${positions.length}개 · 체결 ${fills.length}건 · 입출금 ${transfers.rows.length}건`,
+        message: `비트겟 조회 완료 · 포지션 ${positions.length}개 · 체결 ${fills.length}건`,
       })
     } catch (error) {
-      setBitget({ status: '연결 오류', asset: null, message: error instanceof Error ? error.message : '알 수 없는 오류', positions: [], fills: [], transfers: [], transferMessage: '비트겟 입출금 조회 실패' })
+      setBitget({ status: '연결 오류', asset: null, message: error instanceof Error ? error.message : '알 수 없는 오류', positions: [], fills: [] })
     }
   }
 
@@ -196,7 +155,7 @@ export default function Page() {
     alert('매매일지 저장 완료')
   }
 
-  const addManualDeposit = (exchange: 'mt5' | 'orangex') => {
+  const addManualDeposit = (exchange: 'bitget' | 'mt5' | 'orangex') => {
     const draft = depositDrafts[exchange]
     const raw = toNum(draft.amount)
     if (!raw) {
@@ -304,7 +263,7 @@ export default function Page() {
         <div className="panel glass connectBox">
           <div className="panelHead"><div><p>BITGET API</p><h2>비트겟 API 연결</h2></div><span className="badge">{bitget.status}</span></div>
           <div className="apiStatus"><b>{bitget.asset !== null ? money(bitget.asset) : '자산 대기중'}</b><p>{bitget.message}</p></div>
-          <button onClick={fetchBitget}>비트겟 자산/포지션 새로고침</button>
+          <button onClick={fetchBitget}>비트겟 자산/포지션/체결 새로고침</button>
           <small>API Key는 화면에 입력하지 않습니다. Vercel 환경변수에 저장된 키로 서버에서만 조회합니다.</small>
         </div>
         <div className="panel glass connectBox">
@@ -347,13 +306,12 @@ export default function Page() {
 
       <section className="grid second records">
         <div className="panel glass depositPanel">
-          <div className="panelHead"><div><p>DEPOSIT / WITHDRAWAL</p><h2>입출금 관리</h2></div><span className="badge">BITGET API + MANUAL</span></div>
-          <div className="depositNote"><b>비트겟</b><span>API 자동 조회</span><small>{bitget.transferMessage}</small></div>
-          {bitget.transfers.length === 0 ? <p className="empty">비트겟 API 입출금 내역이 없거나 권한 확인이 필요합니다.</p> : bitget.transfers.filter((r) => selected === 'all' || selected === 'bitget').map((r, i) => <div className="record" key={`bitget-${i}`}><div><b>비트겟 · {r.type}</b><span>{r.time} · {r.memo}</span></div><strong className={r.amount >= 0 ? 'green' : 'red'}>{signed(r.amount)}</strong></div>)}
+          <div className="panelHead"><div><p>DEPOSIT / WITHDRAWAL</p><h2>입출금 관리</h2></div><span className="badge">ALL MANUAL</span></div>
+          <div className="depositNote"><b>입출금은 전부 수동 기록</b><span>API 영향 없음</span><small>비트겟도 출금 권한 없이 안전하게 운용하기 위해 수동 기록으로 관리합니다.</small></div>
 
           <div className="manualDepositWrap">
-            {(['mt5','orangex'] as const).map((exchange) => <div className="manualDeposit" key={exchange}>
-              <b>{exchange === 'mt5' ? '메타트레이더' : '오렌지X'} 입출금 수동 기록</b>
+            {(['bitget','mt5','orangex'] as const).map((exchange) => <div className="manualDeposit" key={exchange}>
+              <b>{exchange === 'bitget' ? '비트겟' : exchange === 'mt5' ? '메타트레이더' : '오렌지X'} 입출금 수동 기록</b>
               <div className="depositInputGrid">
                 <select value={depositDrafts[exchange].type} onChange={(e) => setDepositDrafts({ ...depositDrafts, [exchange]: { ...depositDrafts[exchange], type: e.target.value as '입금' | '출금' } })}>
                   <option value="입금">입금</option>

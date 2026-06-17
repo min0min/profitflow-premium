@@ -75,9 +75,6 @@ export const bitgetTrades = [
   { market: 'SOLUSDT', side: 'Long', time: '어제 19:05', pnl: 24, result: 'WIN' },
 ]
 
-// 비트겟 입출금은 API로만 불러옵니다. 아래 기본값은 MT5/오렌지X 수동 기록 예시입니다.
-export const depositRecords: DepositRecord[] = [
-  { exchange: 'mt5', type: '입금', amount: 3000, time: '6월 10일', memo: '금 자동매매 증거금' },
-  { exchange: 'mt5', type: '출금', amount: -400, time: '6월 17일', memo: '월간 수익 일부 회수' },
-  { exchange: 'orangex', type: '입금', amount: 700, time: '6월 12일', memo: '봇 테스트 자금' },
-]
+// 입출금은 비트겟/MT5/오렌지X 전부 수동으로 기록합니다.
+// API 출금 권한을 열지 않아도 되므로 보안상 안전하고, 거래소 간 이동도 중복 집계되지 않습니다.
+export const depositRecords: DepositRecord[] = []
