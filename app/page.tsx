@@ -2,17 +2,20 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { accounts as baseAccounts, bitgetTrades, daily, depositRecords, equity, exchanges, monthly, type Account, type ExchangeKey } from '../lib/data'
+import { accounts as baseAccounts, bitgetTrades, daily, depositRecords, equity, exchanges, monthly, type Account, type DepositRecord, type ExchangeKey } from '../lib/data'
 
 type Lang = 'ko' | 'en'
 type Period = '7D' | '30D' | '90D' | 'ALL'
 type ManualState = Record<'mt5' | 'orangex', { asset: string; today: string; month: string; winRate: string; trades: string }>
+type ManualDepositDraft = Record<'mt5' | 'orangex', { type: '입금' | '출금'; amount: string; time: string; memo: string }>
 type BitgetState = {
   status: '연결 전' | '연결 중' | '연결 완료' | '연결 오류'
   asset: number | null
   message: string
   positions: any[]
   fills: any[]
+  transfers: DepositRecord[]
+  transferMessage: string
 }
 
 const money = (n: number) => `${n < 0 ? '-' : ''}$${Math.abs(Math.round(n)).toLocaleString()}`
@@ -34,6 +37,13 @@ const defaultBitget: BitgetState = {
   message: 'Vercel 환경변수 기반으로 조회합니다.',
   positions: [],
   fills: [],
+  transfers: [],
+  transferMessage: '비트겟 입출금은 API로 조회합니다.',
+}
+
+const defaultDepositDrafts: ManualDepositDraft = {
+  mt5: { type: '입금', amount: '', time: '', memo: '' },
+  orangex: { type: '입금', amount: '', time: '', memo: '' },
 }
 
 function readBitgetAsset(payload: any) {
@@ -61,6 +71,41 @@ function readFills(payload: any) {
   return []
 }
 
+function parseBitgetTransferRows(payload: any, type: '입금' | '출금') {
+  const rows = payload?.data?.data
+  if (!Array.isArray(rows)) return []
+  return rows.map((r: any): DepositRecord => {
+    const rawAmount = toNum(r.size ?? r.amount ?? r.quantity, 0)
+    const signedAmount = type === '출금' ? -Math.abs(rawAmount) : Math.abs(rawAmount)
+    const timeValue = r.cTime || r.uTime || r.createTime || r.updateTime
+    const time = timeValue ? new Date(Number(timeValue)).toLocaleDateString('ko-KR') : '최근 기록'
+    const coin = r.coin ? `${r.coin} ` : ''
+    const status = r.status ? ` · ${r.status}` : ''
+    const chain = r.chain ? ` · ${r.chain}` : ''
+    return {
+      exchange: 'bitget',
+      type,
+      amount: signedAmount,
+      time,
+      memo: `${coin}${type}${status}${chain}`.trim(),
+    }
+  })
+}
+
+function readBitgetTransfers(payload: any) {
+  const depositOk = payload?.deposits?.ok && payload?.deposits?.data?.code === '00000'
+  const withdrawalOk = payload?.withdrawals?.ok && payload?.withdrawals?.data?.code === '00000'
+  const deposits = depositOk ? parseBitgetTransferRows(payload.deposits, '입금') : []
+  const withdrawals = withdrawalOk ? parseBitgetTransferRows(payload.withdrawals, '출금') : []
+  const rows = [...deposits, ...withdrawals]
+  const message = rows.length
+    ? `비트겟 API 입출금 ${rows.length}건 조회 완료`
+    : depositOk || withdrawalOk
+      ? '최근 180일 USDT 입출금 내역이 없습니다.'
+      : '비트겟 입출금 API 권한이 없거나 응답 오류입니다. 필요하면 API 권한에서 Wallet/Taxation 조회 권한을 확인하세요.'
+  return { rows, message }
+}
+
 export default function Page() {
   const [selected, setSelected] = useState<ExchangeKey>('all')
   const [lang, setLang] = useState<Lang>('ko')
@@ -68,38 +113,45 @@ export default function Page() {
   const [manual, setManual] = useState<ManualState>(defaultManual)
   const [bitget, setBitget] = useState<BitgetState>(defaultBitget)
   const [journal, setJournal] = useState('')
+  const [manualDeposits, setManualDeposits] = useState<DepositRecord[]>(depositRecords)
+  const [depositDrafts, setDepositDrafts] = useState<ManualDepositDraft>(defaultDepositDrafts)
 
   const fetchBitget = async () => {
     try {
-      setBitget((prev) => ({ ...prev, status: '연결 중', message: '비트겟 자산/포지션/체결내역을 불러오는 중입니다.' }))
+      setBitget((prev) => ({ ...prev, status: '연결 중', message: '비트겟 자산/포지션/체결/입출금을 불러오는 중입니다.' }))
       const res = await fetch('/api/bitget', { cache: 'no-store' })
       const payload = await res.json()
 
       if (!res.ok || !payload?.ok || !payload?.accounts?.ok) {
-        setBitget({ status: '연결 오류', asset: null, message: payload?.accounts?.data?.msg || payload?.error || 'Bitget API 응답 오류', positions: [], fills: [] })
+        setBitget({ status: '연결 오류', asset: null, message: payload?.accounts?.data?.msg || payload?.error || 'Bitget API 응답 오류', positions: [], fills: [], transfers: [], transferMessage: '비트겟 입출금 조회 실패' })
         return
       }
 
       const asset = readBitgetAsset(payload)
       const positions = readPositions(payload)
       const fills = readFills(payload)
+      const transfers = readBitgetTransfers(payload)
       setBitget({
         status: '연결 완료',
         asset,
         positions,
         fills,
-        message: `비트겟 조회 완료 · 포지션 ${positions.length}개 · 체결 ${fills.length}건`,
+        transfers: transfers.rows,
+        transferMessage: transfers.message,
+        message: `비트겟 조회 완료 · 포지션 ${positions.length}개 · 체결 ${fills.length}건 · 입출금 ${transfers.rows.length}건`,
       })
     } catch (error) {
-      setBitget({ status: '연결 오류', asset: null, message: error instanceof Error ? error.message : '알 수 없는 오류', positions: [], fills: [] })
+      setBitget({ status: '연결 오류', asset: null, message: error instanceof Error ? error.message : '알 수 없는 오류', positions: [], fills: [], transfers: [], transferMessage: '비트겟 입출금 조회 실패' })
     }
   }
 
   useEffect(() => {
     const savedManual = window.localStorage.getItem('profitflow-manual')
     const savedJournal = window.localStorage.getItem('profitflow-journal')
+    const savedDeposits = window.localStorage.getItem('profitflow-manual-deposits')
     if (savedManual) setManual(JSON.parse(savedManual))
     if (savedJournal) setJournal(savedJournal)
+    if (savedDeposits) setManualDeposits(JSON.parse(savedDeposits))
     fetchBitget()
   }, [])
 
@@ -135,12 +187,39 @@ export default function Page() {
 
   const saveManual = () => {
     window.localStorage.setItem('profitflow-manual', JSON.stringify(manual))
+    window.localStorage.setItem('profitflow-manual-deposits', JSON.stringify(manualDeposits))
     alert('수동 계좌 입력값 저장 완료')
   }
 
   const saveJournal = () => {
     window.localStorage.setItem('profitflow-journal', journal)
     alert('매매일지 저장 완료')
+  }
+
+  const addManualDeposit = (exchange: 'mt5' | 'orangex') => {
+    const draft = depositDrafts[exchange]
+    const raw = toNum(draft.amount)
+    if (!raw) {
+      alert('금액을 입력해줘')
+      return
+    }
+    const row: DepositRecord = {
+      exchange,
+      type: draft.type,
+      amount: draft.type === '출금' ? -Math.abs(raw) : Math.abs(raw),
+      time: draft.time || new Date().toLocaleDateString('ko-KR'),
+      memo: draft.memo || `${draft.type} 기록`,
+    }
+    const next = [row, ...manualDeposits]
+    setManualDeposits(next)
+    window.localStorage.setItem('profitflow-manual-deposits', JSON.stringify(next))
+    setDepositDrafts({ ...depositDrafts, [exchange]: { ...defaultDepositDrafts[exchange] } })
+  }
+
+  const removeManualDeposit = (index: number) => {
+    const next = manualDeposits.filter((_, i) => i !== index)
+    setManualDeposits(next)
+    window.localStorage.setItem('profitflow-manual-deposits', JSON.stringify(next))
   }
 
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -267,9 +346,28 @@ export default function Page() {
       </section>
 
       <section className="grid second records">
-        <div className="panel glass">
-          <div className="panelHead"><div><p>DEPOSIT / WITHDRAWAL</p><h2>입출금 관리</h2></div><span className="badge">3 ACCOUNTS</span></div>
-          {depositRecords.filter((r) => selected === 'all' || r.exchange === selected).map((r, i) => <div className="record" key={i}><div><b>{exchanges.find(e => e.key === r.exchange)?.ko} · {r.type}</b><span>{r.time} · {r.memo}</span></div><strong className={r.amount >= 0 ? 'green' : 'red'}>{signed(r.amount)}</strong></div>)}
+        <div className="panel glass depositPanel">
+          <div className="panelHead"><div><p>DEPOSIT / WITHDRAWAL</p><h2>입출금 관리</h2></div><span className="badge">BITGET API + MANUAL</span></div>
+          <div className="depositNote"><b>비트겟</b><span>API 자동 조회</span><small>{bitget.transferMessage}</small></div>
+          {bitget.transfers.length === 0 ? <p className="empty">비트겟 API 입출금 내역이 없거나 권한 확인이 필요합니다.</p> : bitget.transfers.filter((r) => selected === 'all' || selected === 'bitget').map((r, i) => <div className="record" key={`bitget-${i}`}><div><b>비트겟 · {r.type}</b><span>{r.time} · {r.memo}</span></div><strong className={r.amount >= 0 ? 'green' : 'red'}>{signed(r.amount)}</strong></div>)}
+
+          <div className="manualDepositWrap">
+            {(['mt5','orangex'] as const).map((exchange) => <div className="manualDeposit" key={exchange}>
+              <b>{exchange === 'mt5' ? '메타트레이더' : '오렌지X'} 입출금 수동 기록</b>
+              <div className="depositInputGrid">
+                <select value={depositDrafts[exchange].type} onChange={(e) => setDepositDrafts({ ...depositDrafts, [exchange]: { ...depositDrafts[exchange], type: e.target.value as '입금' | '출금' } })}>
+                  <option value="입금">입금</option>
+                  <option value="출금">출금</option>
+                </select>
+                <input placeholder="금액" value={depositDrafts[exchange].amount} onChange={(e) => setDepositDrafts({ ...depositDrafts, [exchange]: { ...depositDrafts[exchange], amount: e.target.value } })} />
+                <input placeholder="날짜 예: 6월 18일" value={depositDrafts[exchange].time} onChange={(e) => setDepositDrafts({ ...depositDrafts, [exchange]: { ...depositDrafts[exchange], time: e.target.value } })} />
+                <input placeholder="메모" value={depositDrafts[exchange].memo} onChange={(e) => setDepositDrafts({ ...depositDrafts, [exchange]: { ...depositDrafts[exchange], memo: e.target.value } })} />
+                <button onClick={() => addManualDeposit(exchange)}>추가</button>
+              </div>
+            </div>)}
+          </div>
+
+          {manualDeposits.filter((r) => selected === 'all' || r.exchange === selected).map((r, i) => <div className="record" key={`manual-${i}`}><div><b>{exchanges.find(e => e.key === r.exchange)?.ko} · {r.type}</b><span>{r.time} · {r.memo}</span></div><div className="recordActions"><strong className={r.amount >= 0 ? 'green' : 'red'}>{signed(r.amount)}</strong><button onClick={() => removeManualDeposit(i)}>삭제</button></div></div>)}
         </div>
         <div className="panel glass journalBox">
           <div className="panelHead"><div><p>TRADING JOURNAL</p><h2>매매일지 메모</h2></div><span className="badge">LOCAL SAVE</span></div>
