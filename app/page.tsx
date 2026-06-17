@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { accounts as baseAccounts, bitgetTrades, daily, depositRecords, equity, exchanges, monthly, type Account, type DepositRecord, type ExchangeKey } from '../lib/data'
 import { supabase } from '../lib/supabase'
+import { accounts as baseAccounts, bitgetTrades, daily, depositRecords, equity, exchanges, monthly, type Account, type DepositRecord, type ExchangeKey } from '../lib/data'
 
 type Lang = 'ko' | 'en'
 type Period = '7D' | '30D' | '90D' | 'ALL'
 type ManualState = Record<'mt5' | 'orangex', { asset: string; today: string; month: string; winRate: string; trades: string }>
 type ManualDepositDraft = Record<'bitget' | 'mt5' | 'orangex', { type: '입금' | '출금'; amount: string; time: string; memo: string }>
+type StoredDepositRecord = DepositRecord & { id?: number; localId?: string }
 type BitgetState = {
   status: '연결 전' | '연결 중' | '연결 완료' | '연결 오류'
   asset: number | null
@@ -69,6 +70,8 @@ function readFills(payload: any) {
   return []
 }
 
+const makeLocalDeposit = (row: DepositRecord): StoredDepositRecord => ({ ...row, localId: `${Date.now()}-${Math.random().toString(16).slice(2)}` })
+
 export default function Page() {
   const [selected, setSelected] = useState<ExchangeKey>('all')
   const [lang, setLang] = useState<Lang>('ko')
@@ -76,93 +79,10 @@ export default function Page() {
   const [manual, setManual] = useState<ManualState>(defaultManual)
   const [bitget, setBitget] = useState<BitgetState>(defaultBitget)
   const [journal, setJournal] = useState('')
-  const [manualDeposits, setManualDeposits] = useState<DepositRecord[]>(depositRecords)
+  const [manualDeposits, setManualDeposits] = useState<StoredDepositRecord[]>(depositRecords.map(makeLocalDeposit))
   const [depositDrafts, setDepositDrafts] = useState<ManualDepositDraft>(defaultDepositDrafts)
   const [hydrated, setHydrated] = useState(false)
-  const [cloudStatus, setCloudStatus] = useState('Supabase 연결 대기')
-
-  const loadCloudData = async () => {
-    try {
-      setCloudStatus('Supabase 데이터 불러오는 중')
-
-      const [manualResult, depositResult, journalResult] = await Promise.all([
-        supabase.from('manual_accounts').select('*'),
-        supabase.from('deposit_withdrawals').select('*').order('created_at', { ascending: false }),
-        supabase.from('trading_journal').select('*').order('created_at', { ascending: false }).limit(1),
-      ])
-
-      if (!manualResult.error && Array.isArray(manualResult.data)) {
-        setManual((prev) => {
-          const next = { ...prev }
-          for (const row of manualResult.data) {
-            const exchange = row.exchange as 'mt5' | 'orangex'
-            if (exchange === 'mt5' || exchange === 'orangex') {
-              next[exchange] = {
-                ...next[exchange],
-                asset: String(row.asset ?? next[exchange].asset),
-                today: String(row.today ?? row.today_pnl ?? next[exchange].today),
-                month: String(row.month ?? row.month_pnl ?? next[exchange].month),
-                winRate: String(row.win_rate ?? row.winRate ?? next[exchange].winRate),
-                trades: String(row.trades ?? next[exchange].trades),
-              }
-            }
-          }
-          return next
-        })
-      }
-
-      if (!depositResult.error && Array.isArray(depositResult.data)) {
-        setManualDeposits(depositResult.data.map((row: any) => ({
-          id: row.id,
-          exchange: row.exchange,
-          type: row.type,
-          amount: Number(row.amount),
-          time: row.time || row.created_at?.slice(0, 10) || '',
-          memo: row.memo || row.note || '',
-        })))
-      }
-
-      if (!journalResult.error && Array.isArray(journalResult.data) && journalResult.data[0]) {
-        const row = journalResult.data[0] as any
-        setJournal(row.content || row.note || '')
-      }
-
-      const errors = [manualResult.error, depositResult.error, journalResult.error].filter(Boolean)
-      setCloudStatus(errors.length ? 'Supabase 일부 불러오기 실패 · 로컬 백업 사용' : 'Supabase 영구 저장 연결 완료')
-    } catch (error) {
-      console.warn('Supabase 불러오기 실패', error)
-      setCloudStatus('Supabase 연결 실패 · 로컬 백업 사용')
-    }
-  }
-
-  const saveManualToCloud = async (nextManual = manual) => {
-    try {
-      const rows = (['mt5', 'orangex'] as const).map((exchange, index) => ({
-        id: index + 1,
-        exchange,
-        asset: toNum(nextManual[exchange].asset),
-        today: toNum(nextManual[exchange].today),
-        month: toNum(nextManual[exchange].month),
-        win_rate: toNum(nextManual[exchange].winRate),
-        trades: toNum(nextManual[exchange].trades),
-        updated_at: new Date().toISOString(),
-      }))
-
-      const { error } = await supabase.from('manual_accounts').upsert(rows, { onConflict: 'id' })
-
-      if (error) {
-        // 사용자가 초기에 만든 manual_accounts 테이블이 asset 컬럼만 있을 수도 있어서, 그 경우 최소 저장으로 재시도합니다.
-        const minimalRows = rows.map(({ id, exchange, asset, updated_at }) => ({ id, exchange, asset, updated_at }))
-        const retry = await supabase.from('manual_accounts').upsert(minimalRows, { onConflict: 'id' })
-        if (retry.error) throw retry.error
-      }
-
-      setCloudStatus('수동 계좌 Supabase 저장 완료')
-    } catch (error) {
-      console.warn('수동 계좌 Supabase 저장 실패', error)
-      setCloudStatus('수동 계좌 클라우드 저장 실패 · 로컬 백업 저장됨')
-    }
-  }
+  const [cloudStatus, setCloudStatus] = useState('클라우드 저장 준비중')
 
   const fetchBitget = async () => {
     try {
@@ -190,20 +110,71 @@ export default function Page() {
     }
   }
 
-  useEffect(() => {
-    try {
-      const savedManual = window.localStorage.getItem('profitflow-manual-v8') || window.localStorage.getItem('profitflow-manual-v8') || window.localStorage.getItem('profitflow-manual')
-      const savedJournal = window.localStorage.getItem('profitflow-journal-v8') || window.localStorage.getItem('profitflow-journal-v8') || window.localStorage.getItem('profitflow-journal')
-      const savedDeposits = window.localStorage.getItem('profitflow-manual-deposits-v8') || window.localStorage.getItem('profitflow-manual-deposits-v8') || window.localStorage.getItem('profitflow-manual-deposits')
-      if (savedManual) setManual(JSON.parse(savedManual))
-      if (savedJournal) setJournal(savedJournal)
-      if (savedDeposits) setManualDeposits(JSON.parse(savedDeposits))
-    } catch (error) {
-      console.warn('로컬 백업 데이터 복구 실패', error)
-    } finally {
-      setHydrated(true)
+  const loadLocalBackup = () => {
+    const savedManual = window.localStorage.getItem('profitflow-manual-v8') || window.localStorage.getItem('profitflow-manual-v7') || window.localStorage.getItem('profitflow-manual')
+    const savedJournal = window.localStorage.getItem('profitflow-journal-v8') || window.localStorage.getItem('profitflow-journal-v7') || window.localStorage.getItem('profitflow-journal')
+    const savedDeposits = window.localStorage.getItem('profitflow-manual-deposits-v8') || window.localStorage.getItem('profitflow-manual-deposits-v7') || window.localStorage.getItem('profitflow-manual-deposits')
+    if (savedManual) setManual(JSON.parse(savedManual))
+    if (savedJournal) setJournal(savedJournal)
+    if (savedDeposits) setManualDeposits(JSON.parse(savedDeposits).map((r: StoredDepositRecord) => ({ ...r, localId: r.localId || `${Date.now()}-${Math.random()}` })))
+  }
+
+  const loadCloudData = async () => {
+    if (!supabase) {
+      setCloudStatus('Supabase 환경변수 없음 - 로컬 백업 사용중')
+      loadLocalBackup()
+      return
     }
-    loadCloudData()
+
+    try {
+      const [manualRes, depositRes, journalRes] = await Promise.all([
+        supabase.from('manual_accounts').select('*'),
+        supabase.from('deposit_withdrawals').select('*').order('created_at', { ascending: false }),
+        supabase.from('trading_journal').select('*').order('created_at', { ascending: false }).limit(1),
+      ])
+
+      if (manualRes.error) throw manualRes.error
+      if (depositRes.error) throw depositRes.error
+      if (journalRes.error) throw journalRes.error
+
+      const nextManual: ManualState = { ...defaultManual }
+      ;(manualRes.data || []).forEach((row: any) => {
+        if (row.exchange === 'mt5' || row.exchange === 'orangex') {
+          nextManual[row.exchange] = {
+            asset: String(row.asset ?? defaultManual[row.exchange].asset),
+            today: String(row.today ?? defaultManual[row.exchange].today),
+            month: String(row.month ?? defaultManual[row.exchange].month),
+            winRate: String(row.win_rate ?? row.winRate ?? defaultManual[row.exchange].winRate),
+            trades: String(row.trades ?? defaultManual[row.exchange].trades),
+          }
+        }
+      })
+      setManual(nextManual)
+
+      const deposits = (depositRes.data || []).map((row: any) => ({
+        id: row.id,
+        exchange: row.exchange,
+        type: row.type,
+        amount: Number(row.amount || 0),
+        time: row.time || (row.created_at ? new Date(row.created_at).toLocaleDateString('ko-KR') : '기록 없음'),
+        memo: row.note || row.memo || '',
+        localId: `cloud-${row.id}`,
+      })).filter((r: StoredDepositRecord) => ['bitget', 'mt5', 'orangex'].includes(r.exchange))
+      setManualDeposits(deposits)
+
+      const journalRow: any = journalRes.data?.[0]
+      if (journalRow) setJournal(journalRow.content ?? journalRow.note ?? '')
+
+      setCloudStatus('Supabase 클라우드 저장 연결 완료')
+    } catch (error) {
+      console.warn('Supabase 로드 실패', error)
+      setCloudStatus('클라우드 로드 실패 - 로컬 백업 사용중')
+      loadLocalBackup()
+    }
+  }
+
+  useEffect(() => {
+    loadCloudData().finally(() => setHydrated(true))
     fetchBitget()
   }, [])
 
@@ -246,7 +217,7 @@ export default function Page() {
   const today = selectedAccounts.reduce((s, a) => s + a.today, 0)
   const month = selectedAccounts.reduce((s, a) => s + a.month, 0)
   const tradesCount = selectedAccounts.reduce((s, a) => s + a.trades, 0)
-  const avgWin = Math.round(selectedAccounts.reduce((s, a) => s + a.winRate, 0) / selectedAccounts.length)
+  const avgWin = selectedAccounts.length ? Math.round(selectedAccounts.reduce((s, a) => s + a.winRate, 0) / selectedAccounts.length) : 0
   const equityData = period === '7D' ? equity.slice(-7) : period === '30D' ? equity.slice(-30) : period === '90D' ? equity.slice(-90) : equity
   const dailyData = period === '7D' ? daily.slice(-7) : daily
   const key = selected
@@ -254,34 +225,60 @@ export default function Page() {
   const aiList = useMemo(() => {
     const map = {
       bitget: `비트겟은 API 계좌입니다. 현재 ${bitget.status}이며, 실제 포지션 ${bitget.positions.length}개와 최근 체결 ${bitget.fills.length}건을 하단에서 분리해 확인합니다.`,
-      mt5: `메타트레이더는 수동 입력 계좌입니다. 오늘 손익률은 ${pct(toNum(manual.mt5.today), toNum(manual.mt5.asset))}, 월간 손익률은 ${pct(toNum(manual.mt5.month), toNum(manual.mt5.asset))}입니다.`,
-      orangex: `오렌지X는 자동매매 수동 기록 계좌입니다. 오늘 손익률은 ${pct(toNum(manual.orangex.today), toNum(manual.orangex.asset))}, 월간 손익률은 ${pct(toNum(manual.orangex.month), toNum(manual.orangex.asset))}입니다.`,
+      mt5: `메타트레이더는 수동 입력 계좌입니다. 오늘 손익률은 ${pct(toNum(manual.mt5.today), toNum(manual.mt5.asset) + depositAdjustments.mt5)}, 월간 손익률은 ${pct(toNum(manual.mt5.month), toNum(manual.mt5.asset) + depositAdjustments.mt5)}입니다.`,
+      orangex: `오렌지X는 자동매매 수동 기록 계좌입니다. 오늘 손익률은 ${pct(toNum(manual.orangex.today), toNum(manual.orangex.asset) + depositAdjustments.orangex)}, 월간 손익률은 ${pct(toNum(manual.orangex.month), toNum(manual.orangex.asset) + depositAdjustments.orangex)}입니다.`,
     }
     return selected === 'all' ? [map.bitget, map.mt5, map.orangex] : [map[selected as 'bitget' | 'mt5' | 'orangex']]
-  }, [selected, manual, bitget.status, bitget.positions.length, bitget.fills.length])
+  }, [selected, manual, bitget.status, bitget.positions.length, bitget.fills.length, depositAdjustments])
 
   const saveManual = async () => {
     window.localStorage.setItem('profitflow-manual-v8', JSON.stringify(manual))
-    window.localStorage.setItem('profitflow-manual-deposits-v8', JSON.stringify(manualDeposits))
-    await saveManualToCloud(manual)
-    alert('수동 계좌 입력값 저장 완료')
+
+    if (!supabase) {
+      setCloudStatus('Supabase 연결 없음 - 로컬 백업 저장됨')
+      alert('로컬 백업 저장 완료')
+      return
+    }
+
+    try {
+      const rows = (['mt5', 'orangex'] as const).map((exchange) => ({
+        exchange,
+        asset: toNum(manual[exchange].asset),
+        today: toNum(manual[exchange].today),
+        month: toNum(manual[exchange].month),
+        win_rate: toNum(manual[exchange].winRate),
+        trades: toNum(manual[exchange].trades),
+        updated_at: new Date().toISOString(),
+      }))
+      const { error } = await supabase.from('manual_accounts').upsert(rows, { onConflict: 'exchange' })
+      if (error) throw error
+      setCloudStatus('수동 계좌 클라우드 저장 완료')
+      alert('수동 계좌 입력값 저장 완료')
+    } catch (error) {
+      console.warn(error)
+      setCloudStatus('수동 계좌 클라우드 저장 실패 - 로컬 백업 저장됨')
+      alert('로컬 백업은 저장됨. Supabase SQL/RLS를 확인해줘')
+    }
   }
 
   const saveJournal = async () => {
     window.localStorage.setItem('profitflow-journal-v8', journal)
+
+    if (!supabase) {
+      setCloudStatus('Supabase 연결 없음 - 매매일지 로컬 저장됨')
+      alert('매매일지 로컬 저장 완료')
+      return
+    }
+
     try {
-      const { error } = await supabase.from('trading_journal').upsert({
-        id: 1,
-        content: journal,
-        created_at: new Date().toISOString(),
-      }, { onConflict: 'id' })
+      const { error } = await supabase.from('trading_journal').upsert({ id: 1, content: journal, note: journal, created_at: new Date().toISOString() })
       if (error) throw error
-      setCloudStatus('매매일지 Supabase 저장 완료')
-      alert('매매일지 클라우드 저장 완료')
+      setCloudStatus('매매일지 클라우드 저장 완료')
+      alert('매매일지 저장 완료')
     } catch (error) {
-      console.warn('매매일지 Supabase 저장 실패', error)
-      setCloudStatus('매매일지 클라우드 저장 실패 · 로컬 백업 저장됨')
-      alert('로컬 백업 저장 완료. Supabase 테이블 컬럼을 확인해줘.')
+      console.warn(error)
+      setCloudStatus('매매일지 클라우드 저장 실패 - 로컬 백업 저장됨')
+      alert('로컬 백업은 저장됨. Supabase SQL/RLS를 확인해줘')
     }
   }
 
@@ -292,56 +289,57 @@ export default function Page() {
       alert('금액을 입력해줘')
       return
     }
-    const row: DepositRecord = {
+
+    const cleanRow: DepositRecord = {
       exchange,
       type: draft.type,
       amount: draft.type === '출금' ? -Math.abs(raw) : Math.abs(raw),
       time: draft.time || new Date().toLocaleDateString('ko-KR'),
       memo: draft.memo || `${draft.type} 기록`,
     }
-    try {
-      const { data, error } = await supabase.from('deposit_withdrawals').insert({
-        exchange: row.exchange,
-        type: row.type,
-        amount: row.amount,
-        note: `${row.time} · ${row.memo}`,
-        created_at: new Date().toISOString(),
-      }).select().single()
 
-      if (error) throw error
+    let row: StoredDepositRecord = makeLocalDeposit(cleanRow)
 
-      const savedRow: DepositRecord = {
-        ...row,
-        id: data?.id,
-        time: data?.time || row.time,
-        memo: data?.memo || data?.note || row.memo,
-        amount: Number(data?.amount ?? row.amount),
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('deposit_withdrawals')
+          .insert({ exchange: cleanRow.exchange, type: cleanRow.type, amount: cleanRow.amount, time: cleanRow.time, note: cleanRow.memo })
+          .select('*')
+          .single()
+        if (error) throw error
+        row = { ...cleanRow, id: data.id, time: data.time || cleanRow.time, memo: data.note || cleanRow.memo, localId: `cloud-${data.id}` }
+        setCloudStatus('입출금 클라우드 저장 완료')
+      } catch (error) {
+        console.warn(error)
+        setCloudStatus('입출금 클라우드 저장 실패 - 로컬 백업 저장됨')
       }
-      const next = [savedRow, ...manualDeposits]
-      setManualDeposits(next)
-      window.localStorage.setItem('profitflow-manual-deposits-v8', JSON.stringify(next))
-      setCloudStatus('입출금 Supabase 저장 완료')
-    } catch (error) {
-      console.warn('입출금 Supabase 저장 실패', error)
-      const next = [row, ...manualDeposits]
-      setManualDeposits(next)
-      window.localStorage.setItem('profitflow-manual-deposits-v8', JSON.stringify(next))
-      setCloudStatus('입출금 클라우드 저장 실패 · 로컬 백업 저장됨')
     }
 
+    const next = [row, ...manualDeposits]
+    setManualDeposits(next)
+    window.localStorage.setItem('profitflow-manual-deposits-v8', JSON.stringify(next))
     setDepositDrafts({ ...depositDrafts, [exchange]: { ...defaultDepositDrafts[exchange] } })
   }
 
-  const removeManualDeposit = async (index: number) => {
-    const target = manualDeposits[index]
-    const next = manualDeposits.filter((_, i) => i !== index)
+  const removeManualDeposit = async (target: StoredDepositRecord) => {
+    if (target.id && supabase) {
+      try {
+        const { error } = await supabase.from('deposit_withdrawals').delete().eq('id', target.id)
+        if (error) throw error
+        setCloudStatus('입출금 삭제 클라우드 반영 완료')
+      } catch (error) {
+        console.warn(error)
+        setCloudStatus('입출금 삭제 클라우드 반영 실패 - 화면에서만 제거됨')
+      }
+    }
+
+    const next = manualDeposits.filter((row) => {
+      if (target.id && row.id) return row.id !== target.id
+      return row.localId !== target.localId
+    })
     setManualDeposits(next)
     window.localStorage.setItem('profitflow-manual-deposits-v8', JSON.stringify(next))
-
-    if (target?.id) {
-      const { error } = await supabase.from('deposit_withdrawals').delete().eq('id', target.id)
-      setCloudStatus(error ? '입출금 Supabase 삭제 실패 · 화면에서는 제거됨' : '입출금 Supabase 삭제 완료')
-    }
   }
 
   const exportBackup = () => {
@@ -361,13 +359,9 @@ export default function Page() {
       const text = await file.text()
       const backup = JSON.parse(text)
       if (backup.manual) setManual(backup.manual)
-      if (backup.manualDeposits) setManualDeposits(backup.manualDeposits)
+      if (backup.manualDeposits) setManualDeposits(backup.manualDeposits.map((r: StoredDepositRecord) => ({ ...r, localId: r.localId || `${Date.now()}-${Math.random()}` })))
       if (typeof backup.journal === 'string') setJournal(backup.journal)
-      window.localStorage.setItem('profitflow-manual-v8', JSON.stringify(backup.manual || manual))
-      window.localStorage.setItem('profitflow-manual-deposits-v8', JSON.stringify(backup.manualDeposits || manualDeposits))
-      window.localStorage.setItem('profitflow-journal-v8', typeof backup.journal === 'string' ? backup.journal : journal)
-      setCloudStatus('백업 복구 완료 · 저장 버튼을 누르면 Supabase에도 반영됩니다')
-      alert('백업 복구 완료')
+      alert('백업 복구 완료. 수동 입력 저장/매매일지 저장을 눌러 클라우드에도 반영해줘.')
     } catch {
       alert('백업 파일을 읽지 못했습니다')
     }
@@ -389,6 +383,7 @@ export default function Page() {
         </div>
         <button className="lang" onClick={() => setLang(lang === 'ko' ? 'en' : 'ko')}>{lang === 'ko' ? '한국어' : 'EN'}</button>
       </nav>
+
       <div className="cloudStatus glass">{cloudStatus}</div>
 
       <section className="hero" id="dashboard">
@@ -499,8 +494,8 @@ export default function Page() {
 
       <section className="grid second records">
         <div className="panel glass depositPanel">
-          <div className="panelHead"><div><p>DEPOSIT / WITHDRAWAL</p><h2>입출금 관리</h2></div><span className="badge">ALL MANUAL</span></div>
-          <div className="depositNote"><b>입출금은 전부 수동 기록</b><span>자산 자동 반영</span><small>입금은 선택 계좌 자산에 더하고, 출금은 선택 계좌 자산에서 차감합니다. Supabase에 영구 저장되고, localStorage는 백업용으로만 사용됩니다.</small></div>
+          <div className="panelHead"><div><p>DEPOSIT / WITHDRAWAL</p><h2>입출금 관리</h2></div><span className="badge">CLOUD MANUAL</span></div>
+          <div className="depositNote"><b>입출금은 전부 수동 기록</b><span>자산 자동 반영</span><small>입금은 선택 계좌 자산에 더하고, 출금은 선택 계좌 자산에서 차감합니다. Supabase 클라우드에 저장됩니다.</small></div>
 
           <div className="manualDepositWrap">
             {(['bitget','mt5','orangex'] as const).map((exchange) => <div className="manualDeposit" key={exchange}>
@@ -518,13 +513,13 @@ export default function Page() {
             </div>)}
           </div>
 
-          {manualDeposits.filter((r) => selected === 'all' || r.exchange === selected).map((r, i) => <div className="record" key={`manual-${i}`}><div><b>{exchanges.find(e => e.key === r.exchange)?.ko} · {r.type}</b><span>{r.time} · {r.memo}</span></div><div className="recordActions"><strong className={r.amount >= 0 ? 'green' : 'red'}>{signed(r.amount)}</strong><button onClick={() => removeManualDeposit(i)}>삭제</button></div></div>)}
+          {manualDeposits.filter((r) => selected === 'all' || r.exchange === selected).map((r) => <div className="record" key={r.id ? `cloud-${r.id}` : r.localId}><div><b>{exchanges.find(e => e.key === r.exchange)?.ko} · {r.type}</b><span>{r.time} · {r.memo}</span></div><div className="recordActions"><strong className={r.amount >= 0 ? 'green' : 'red'}>{signed(r.amount)}</strong><button onClick={() => removeManualDeposit(r)}>삭제</button></div></div>)}
         </div>
         <div className="panel glass journalBox">
           <div className="panelHead"><div><p>TRADING JOURNAL</p><h2>매매일지 메모</h2></div><span className="badge">CLOUD SAVE</span></div>
           <textarea value={journal} onChange={(e) => setJournal(e.target.value)} placeholder="예: 오늘 BTC 롱은 진입 근거는 좋았지만, 추가진입 간격이 좁았다. 다음에는 4개 포지션 전 -8% 기준 확인." />
           <button onClick={saveJournal}>매매일지 저장</button>
-          <small>Supabase에 영구 저장됩니다. 백업 파일은 추가 안전장치입니다.</small>
+          <small>Supabase 클라우드에 저장됩니다. localStorage 백업도 함께 유지됩니다.</small>
           <div className="backupRow"><button className="ghostSmall" onClick={exportBackup}>백업 내보내기</button><label className="ghostSmall fileLabel">백업 불러오기<input type="file" accept="application/json" onChange={(e) => importBackup(e.target.files?.[0] ?? null)} /></label></div>
         </div>
       </section>
