@@ -2,18 +2,24 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { accounts as baseAccounts, daily, equity, exchanges, monthly, trades, type Account, type ExchangeKey } from '../lib/data'
+import { accounts as baseAccounts, bitgetTrades, daily, depositRecords, equity, exchanges, monthly, type Account, type ExchangeKey } from '../lib/data'
 
 type Lang = 'ko' | 'en'
 type Period = '7D' | '30D' | '90D' | 'ALL'
 type ManualState = Record<'mt5' | 'orangex', { asset: string; today: string; month: string; winRate: string; trades: string }>
-type BitgetState = { status: '연결 전' | '연결 중' | '연결 완료' | '연결 오류'; asset: number | null; message: string }
+type BitgetState = {
+  status: '연결 전' | '연결 중' | '연결 완료' | '연결 오류'
+  asset: number | null
+  message: string
+  positions: any[]
+  fills: any[]
+}
 
 const money = (n: number) => `${n < 0 ? '-' : ''}$${Math.abs(Math.round(n)).toLocaleString()}`
 const signed = (n: number) => `${n >= 0 ? '+' : '-'}$${Math.abs(Math.round(n)).toLocaleString()}`
 const pct = (profit: number, asset: number) => `${profit >= 0 ? '+' : '-'}${asset > 0 ? ((Math.abs(profit) / asset) * 100).toFixed(2) : '0.00'}%`
-const toNum = (v: string, fallback: number) => {
-  const n = Number(String(v).replaceAll(',', ''))
+const toNum = (v: string | number | undefined | null, fallback = 0) => {
+  const n = Number(String(v ?? '').replaceAll(',', ''))
   return Number.isFinite(n) ? n : fallback
 }
 
@@ -22,30 +28,37 @@ const defaultManual: ManualState = {
   orangex: { asset: '620', today: '-18', month: '74', winRate: '59', trades: '22' },
 }
 
-const defaultBitget: BitgetState = { status: '연결 전', asset: null, message: 'Vercel 환경변수 기반으로 조회합니다.' }
+const defaultBitget: BitgetState = {
+  status: '연결 전',
+  asset: null,
+  message: 'Vercel 환경변수 기반으로 조회합니다.',
+  positions: [],
+  fills: [],
+}
 
 function readBitgetAsset(payload: any) {
   const rows = payload?.accounts?.data?.data
   if (!Array.isArray(rows)) return null
-
   const usdt = rows.find((r: any) => String(r.marginCoin || r.coin || '').toUpperCase() === 'USDT') || rows[0]
   if (!usdt) return null
-
-  const candidates = [
-    usdt.usdtEquity,
-    usdt.equity,
-    usdt.accountEquity,
-    usdt.marginBalance,
-    usdt.available,
-    usdt.availableBalance,
-  ]
-
+  const candidates = [usdt.usdtEquity, usdt.equity, usdt.accountEquity, usdt.marginBalance, usdt.available, usdt.availableBalance]
   for (const value of candidates) {
     const n = Number(value)
     if (Number.isFinite(n)) return n
   }
-
   return null
+}
+
+function readPositions(payload: any) {
+  const rows = payload?.positions?.data?.data
+  if (!Array.isArray(rows)) return []
+  return rows.filter((p: any) => Math.abs(toNum(p.total ?? p.available ?? p.holdSideSize ?? p.size, 0)) > 0)
+}
+
+function readFills(payload: any) {
+  const rows = payload?.fills?.data?.data
+  if (Array.isArray(rows)) return rows.slice(0, 12)
+  return []
 }
 
 export default function Page() {
@@ -54,59 +67,48 @@ export default function Page() {
   const [period, setPeriod] = useState<Period>('30D')
   const [manual, setManual] = useState<ManualState>(defaultManual)
   const [bitget, setBitget] = useState<BitgetState>(defaultBitget)
+  const [journal, setJournal] = useState('')
 
   const fetchBitget = async () => {
     try {
-      setBitget((prev) => ({ ...prev, status: '연결 중', message: '비트겟 자산을 불러오는 중입니다.' }))
+      setBitget((prev) => ({ ...prev, status: '연결 중', message: '비트겟 자산/포지션/체결내역을 불러오는 중입니다.' }))
       const res = await fetch('/api/bitget', { cache: 'no-store' })
       const payload = await res.json()
 
       if (!res.ok || !payload?.ok || !payload?.accounts?.ok) {
-        setBitget({
-          status: '연결 오류',
-          asset: null,
-          message: payload?.accounts?.data?.msg || payload?.error || 'Bitget API 응답 오류',
-        })
+        setBitget({ status: '연결 오류', asset: null, message: payload?.accounts?.data?.msg || payload?.error || 'Bitget API 응답 오류', positions: [], fills: [] })
         return
       }
 
       const asset = readBitgetAsset(payload)
-      if (asset === null) {
-        setBitget({ status: '연결 오류', asset: null, message: '자산 필드를 찾지 못했습니다. /api/bitget 응답 확인 필요.' })
-        return
-      }
-
-      setBitget({ status: '연결 완료', asset, message: '비트겟 선물 USDT 자산 조회 완료' })
+      const positions = readPositions(payload)
+      const fills = readFills(payload)
+      setBitget({
+        status: '연결 완료',
+        asset,
+        positions,
+        fills,
+        message: `비트겟 조회 완료 · 포지션 ${positions.length}개 · 체결 ${fills.length}건`,
+      })
     } catch (error) {
-      setBitget({ status: '연결 오류', asset: null, message: error instanceof Error ? error.message : '알 수 없는 오류' })
+      setBitget({ status: '연결 오류', asset: null, message: error instanceof Error ? error.message : '알 수 없는 오류', positions: [], fills: [] })
     }
   }
 
   useEffect(() => {
     const savedManual = window.localStorage.getItem('profitflow-manual')
+    const savedJournal = window.localStorage.getItem('profitflow-journal')
     if (savedManual) setManual(JSON.parse(savedManual))
+    if (savedJournal) setJournal(savedJournal)
     fetchBitget()
   }, [])
 
   const accounts = useMemo<Account[]>(() => {
     return baseAccounts.map((a) => {
-      if (a.key === 'bitget') {
-        return {
-          ...a,
-          asset: bitget.asset ?? a.asset,
-        }
-      }
-
+      if (a.key === 'bitget') return { ...a, asset: bitget.asset ?? a.asset }
       if (a.key === 'mt5' || a.key === 'orangex') {
         const m = manual[a.key]
-        return {
-          ...a,
-          asset: toNum(m.asset, a.asset),
-          today: toNum(m.today, a.today),
-          month: toNum(m.month, a.month),
-          winRate: toNum(m.winRate, a.winRate),
-          trades: toNum(m.trades, a.trades),
-        }
+        return { ...a, asset: toNum(m.asset, a.asset), today: toNum(m.today, a.today), month: toNum(m.month, a.month), winRate: toNum(m.winRate, a.winRate), trades: toNum(m.trades, a.trades) }
       }
       return a
     })
@@ -118,25 +120,27 @@ export default function Page() {
   const month = selectedAccounts.reduce((s, a) => s + a.month, 0)
   const tradesCount = selectedAccounts.reduce((s, a) => s + a.trades, 0)
   const avgWin = Math.round(selectedAccounts.reduce((s, a) => s + a.winRate, 0) / selectedAccounts.length)
-  const viewTrades = selected === 'all' ? trades : trades.filter((t) => t.exchange === selected)
   const equityData = period === '7D' ? equity.slice(-7) : period === '30D' ? equity.slice(-30) : period === '90D' ? equity.slice(-90) : equity
   const dailyData = period === '7D' ? daily.slice(-7) : daily
   const key = selected
 
   const aiList = useMemo(() => {
     const map = {
-      bitget: `비트겟은 API 계좌입니다. 현재 연결 상태는 ${bitget.status}입니다. 자산이 자동 조회되면 수동 입력 없이 총자산에 반영됩니다.`,
-      mt5: `메타트레이더는 수동 입력 계좌입니다. 오늘 손익률은 ${pct(toNum(manual.mt5.today, 0), toNum(manual.mt5.asset, 0))}, 월간 손익률은 ${pct(toNum(manual.mt5.month, 0), toNum(manual.mt5.asset, 0))}입니다.`,
-      orangex: `오렌지X는 자동매매 수동 기록 계좌입니다. 오늘 손익률은 ${pct(toNum(manual.orangex.today, 0), toNum(manual.orangex.asset, 0))}, 월간 손익률은 ${pct(toNum(manual.orangex.month, 0), toNum(manual.orangex.asset, 0))}입니다.`,
+      bitget: `비트겟은 API 계좌입니다. 현재 ${bitget.status}이며, 실제 포지션 ${bitget.positions.length}개와 최근 체결 ${bitget.fills.length}건을 하단에서 분리해 확인합니다.`,
+      mt5: `메타트레이더는 수동 입력 계좌입니다. 오늘 손익률은 ${pct(toNum(manual.mt5.today), toNum(manual.mt5.asset))}, 월간 손익률은 ${pct(toNum(manual.mt5.month), toNum(manual.mt5.asset))}입니다.`,
+      orangex: `오렌지X는 자동매매 수동 기록 계좌입니다. 오늘 손익률은 ${pct(toNum(manual.orangex.today), toNum(manual.orangex.asset))}, 월간 손익률은 ${pct(toNum(manual.orangex.month), toNum(manual.orangex.asset))}입니다.`,
     }
-    return selected === 'all'
-      ? [map.bitget, map.mt5, map.orangex]
-      : [map[selected as 'bitget' | 'mt5' | 'orangex']]
-  }, [selected, manual, bitget.status])
+    return selected === 'all' ? [map.bitget, map.mt5, map.orangex] : [map[selected as 'bitget' | 'mt5' | 'orangex']]
+  }, [selected, manual, bitget.status, bitget.positions.length, bitget.fills.length])
 
   const saveManual = () => {
     window.localStorage.setItem('profitflow-manual', JSON.stringify(manual))
     alert('수동 계좌 입력값 저장 완료')
+  }
+
+  const saveJournal = () => {
+    window.localStorage.setItem('profitflow-journal', journal)
+    alert('매매일지 저장 완료')
   }
 
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -150,7 +154,7 @@ export default function Page() {
         <div className="navLinks">
           <button onClick={() => scrollTo('dashboard')}>대시보드</button>
           <button onClick={() => scrollTo('accounts')}>계좌</button>
-          <button onClick={() => scrollTo('trades')}>거래내역</button>
+          <button onClick={() => scrollTo('records')}>기록관리</button>
           <button onClick={() => scrollTo('analysis')}>분석</button>
         </div>
         <button className="lang" onClick={() => setLang(lang === 'ko' ? 'en' : 'ko')}>{lang === 'ko' ? '한국어' : 'EN'}</button>
@@ -160,8 +164,8 @@ export default function Page() {
         <div className="heroText">
           <p className="eyebrow">BITGET API · MT5 MANUAL · ORANGEX MANUAL</p>
           <h1>{lang === 'ko' ? '통합 트레이딩 자산관리' : 'Trading Portfolio OS'}</h1>
-          <p className="sub">비트겟은 API로 자산을 불러오고, 메타트레이더와 오렌지X는 자산/손익을 수동 입력합니다. 오늘·월간 손익률은 자산 대비 자동 계산됩니다.</p>
-          <div className="actions"><button onClick={() => scrollTo('connect')}>계좌 연결/입력</button><button className="ghost" onClick={() => scrollTo('analysis')}>AI 분석 보기</button></div>
+          <p className="sub">비트겟은 API로 실제 자산/포지션/체결내역을 확인하고, 메타트레이더와 오렌지X는 자산·손익·입출금을 수동 관리합니다.</p>
+          <div className="actions"><button onClick={() => scrollTo('connect')}>계좌 연결/입력</button><button className="ghost" onClick={() => scrollTo('records')}>기록관리 보기</button></div>
         </div>
         <div className="phone glass">
           <div className="phoneTop"><span /> <b>{money(totalAsset)}</b></div>
@@ -220,19 +224,16 @@ export default function Page() {
       <section className="grid second" id="connect">
         <div className="panel glass connectBox">
           <div className="panelHead"><div><p>BITGET API</p><h2>비트겟 API 연결</h2></div><span className="badge">{bitget.status}</span></div>
-          <div className="apiStatus">
-            <b>{bitget.asset !== null ? money(bitget.asset) : '자산 대기중'}</b>
-            <p>{bitget.message}</p>
-          </div>
-          <button onClick={fetchBitget}>비트겟 자산 새로고침</button>
+          <div className="apiStatus"><b>{bitget.asset !== null ? money(bitget.asset) : '자산 대기중'}</b><p>{bitget.message}</p></div>
+          <button onClick={fetchBitget}>비트겟 자산/포지션 새로고침</button>
           <small>API Key는 화면에 입력하지 않습니다. Vercel 환경변수에 저장된 키로 서버에서만 조회합니다.</small>
         </div>
         <div className="panel glass connectBox">
           <div className="panelHead"><div><p>MANUAL ACCOUNTS</p><h2>MT5 / 오렌지X 수동 입력</h2></div></div>
           {(['mt5','orangex'] as const).map((k) => {
-            const asset = toNum(manual[k].asset, 0)
-            const todayPnl = toNum(manual[k].today, 0)
-            const monthPnl = toNum(manual[k].month, 0)
+            const asset = toNum(manual[k].asset)
+            const todayPnl = toNum(manual[k].today)
+            const monthPnl = toNum(manual[k].month)
             return <div className="manualGroup" key={k}>
               <b>{k === 'mt5' ? '메타트레이더' : '오렌지X'}</b>
               <div className="manualGrid">
@@ -248,9 +249,34 @@ export default function Page() {
         </div>
       </section>
 
-      <section className="panel glass trades" id="trades">
-        <div className="panelHead"><div><p>TRADE HISTORY</p><h2>{selected === 'all' ? '전체 매매내역' : '선택 거래소 매매내역'}</h2></div></div>
-        {viewTrades.map((t, i) => <div className="trade" key={i}><div><b>{t.market}</b><span>{t.time} · {t.side}</span></div><strong className={t.pnl >= 0 ? 'green' : 'red'}>{signed(t.pnl)}</strong><em className={t.result === 'WIN' ? 'win' : 'loss'}>{t.result}</em></div>)}
+      <section className="grid second records" id="records">
+        <div className="panel glass">
+          <div className="panelHead"><div><p>BITGET POSITIONS</p><h2>실제 포지션</h2></div><span className="badge">BITGET ONLY</span></div>
+          {bitget.positions.length === 0 ? <p className="empty">현재 표시할 비트겟 포지션이 없습니다.</p> : bitget.positions.map((p, i) => <div className="record" key={i}><div><b>{p.symbol || p.instId || 'USDT-FUTURES'}</b><span>{p.holdSide || p.posSide || p.side || 'position'} · 수량 {p.total || p.available || p.size || '-'}</span></div><strong className={toNum(p.unrealizedPL ?? p.pnl ?? p.achievedProfits) >= 0 ? 'green' : 'red'}>{signed(toNum(p.unrealizedPL ?? p.pnl ?? p.achievedProfits))}</strong></div>)}
+        </div>
+        <div className="panel glass">
+          <div className="panelHead"><div><p>BITGET TRADES</p><h2>매매내역</h2></div><span className="badge">BITGET ONLY</span></div>
+          {(bitget.fills.length ? bitget.fills : bitgetTrades).map((t: any, i) => {
+            const market = t.symbol || t.market || t.instId || 'BITGET'
+            const side = t.side || t.tradeSide || 'Trade'
+            const pnl = toNum(t.profit || t.pnl || t.fillPnl || t.feeDetail?.profit, t.pnl ?? 0)
+            const time = t.cTime ? new Date(Number(t.cTime)).toLocaleString('ko-KR') : t.time || '최근 기록'
+            return <div className="record" key={i}><div><b>{market}</b><span>{time} · {side}</span></div><strong className={pnl >= 0 ? 'green' : 'red'}>{signed(pnl)}</strong></div>
+          })}
+        </div>
+      </section>
+
+      <section className="grid second records">
+        <div className="panel glass">
+          <div className="panelHead"><div><p>DEPOSIT / WITHDRAWAL</p><h2>입출금 관리</h2></div><span className="badge">3 ACCOUNTS</span></div>
+          {depositRecords.filter((r) => selected === 'all' || r.exchange === selected).map((r, i) => <div className="record" key={i}><div><b>{exchanges.find(e => e.key === r.exchange)?.ko} · {r.type}</b><span>{r.time} · {r.memo}</span></div><strong className={r.amount >= 0 ? 'green' : 'red'}>{signed(r.amount)}</strong></div>)}
+        </div>
+        <div className="panel glass journalBox">
+          <div className="panelHead"><div><p>TRADING JOURNAL</p><h2>매매일지 메모</h2></div><span className="badge">LOCAL SAVE</span></div>
+          <textarea value={journal} onChange={(e) => setJournal(e.target.value)} placeholder="예: 오늘 BTC 롱은 진입 근거는 좋았지만, 추가진입 간격이 좁았다. 다음에는 4개 포지션 전 -8% 기준 확인." />
+          <button onClick={saveJournal}>매매일지 저장</button>
+          <small>브라우저 localStorage에 저장됩니다. 나중에 Supabase 붙이면 계정별 영구 저장으로 바꿀 수 있습니다.</small>
+        </div>
       </section>
     </main>
   )

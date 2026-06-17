@@ -12,6 +12,14 @@ export type Account = {
   winRate: number
 }
 
+export type DepositRecord = {
+  exchange: Exclude<ExchangeKey, 'all'>
+  type: '입금' | '출금'
+  amount: number
+  time: string
+  memo: string
+}
+
 export const exchanges: { key: ExchangeKey; ko: string; en: string; mode?: 'api' | 'manual' }[] = [
   { key: 'all', ko: '전체', en: 'All' },
   { key: 'bitget', ko: '비트겟', en: 'Bitget', mode: 'api' },
@@ -60,11 +68,17 @@ export const monthly = [
   { month: '6월', bitget: 318, mt5: 980, orangex: 74, all: 1372 },
 ]
 
-export const trades = [
-  { exchange: 'bitget' as const, market: 'BTCUSDT', side: 'Long', time: '오늘 14:20', pnl: 36, result: 'WIN' },
-  { exchange: 'mt5' as const, market: 'XAUUSD', side: 'Buy', time: '오늘 13:45', pnl: 126, result: 'WIN' },
-  { exchange: 'orangex' as const, market: 'Auto Bot', side: 'Grid', time: '오늘 12:10', pnl: -18, result: 'LOSS' },
-  { exchange: 'bitget' as const, market: 'ETHUSDT', side: 'Short', time: '어제 23:18', pnl: -12, result: 'LOSS' },
-  { exchange: 'mt5' as const, market: 'XAUUSD', side: 'Sell', time: '어제 21:02', pnl: 48, result: 'WIN' },
-  { exchange: 'orangex' as const, market: 'Auto Bot', side: 'DCA', time: '어제 18:44', pnl: 22, result: 'WIN' },
+// 하단 매매내역은 비트겟만 표기합니다. MT5/오렌지X 자동매매 내역은 의도적으로 제외.
+export const bitgetTrades = [
+  { market: 'BTCUSDT', side: 'Long', time: '오늘 14:20', pnl: 36, result: 'WIN' },
+  { market: 'ETHUSDT', side: 'Short', time: '어제 23:18', pnl: -12, result: 'LOSS' },
+  { market: 'SOLUSDT', side: 'Long', time: '어제 19:05', pnl: 24, result: 'WIN' },
+]
+
+export const depositRecords: DepositRecord[] = [
+  { exchange: 'bitget', type: '입금', amount: 500, time: '6월 15일', memo: '대회/선물 계좌 충전' },
+  { exchange: 'bitget', type: '출금', amount: -120, time: '6월 16일', memo: '수익 일부 출금' },
+  { exchange: 'mt5', type: '입금', amount: 3000, time: '6월 10일', memo: '금 자동매매 증거금' },
+  { exchange: 'mt5', type: '출금', amount: -400, time: '6월 17일', memo: '월간 수익 일부 회수' },
+  { exchange: 'orangex', type: '입금', amount: 700, time: '6월 12일', memo: '봇 테스트 자금' },
 ]
