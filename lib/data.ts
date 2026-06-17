@@ -1,49 +1,70 @@
-export type ExchangeKey = 'all' | 'bitget' | 'mt5' | 'binance'
+export type ExchangeKey = 'all' | 'bitget' | 'mt5' | 'orangex'
 
-export const exchanges = [
-  { key: 'all', ko: '전체', en: 'All', color: '#f97316' },
-  { key: 'bitget', ko: '비트겟', en: 'Bitget', color: '#45f7b2' },
-  { key: 'mt5', ko: '메타트레이더', en: 'MetaTrader', color: '#a78bfa' },
-  { key: 'binance', ko: '바이낸스', en: 'Binance', color: '#facc15' }
-] as const
+export type Account = {
+  key: Exclude<ExchangeKey, 'all'>
+  ko: string
+  en: string
+  mode: 'api' | 'manual'
+  asset: number
+  today: number
+  month: number
+  trades: number
+  winRate: number
+}
 
-export const accounts = [
-  { key: 'bitget', name: 'Bitget Futures', ko: '비트겟 선물', asset: 2380, today: 84, month: 640, roi: 12.8, winRate: 64, trades: 88 },
-  { key: 'mt5', name: 'MetaTrader 5', ko: '메타트레이더 5', asset: 8120, today: 126, month: 1320, roi: 19.4, winRate: 71, trades: 124 },
-  { key: 'binance', name: 'Binance Futures', ko: '바이낸스 선물', asset: 1840, today: -22, month: 140, roi: 4.1, winRate: 57, trades: 42 }
+export const exchanges: { key: ExchangeKey; ko: string; en: string; mode?: 'api' | 'manual' }[] = [
+  { key: 'all', ko: '전체', en: 'All' },
+  { key: 'bitget', ko: '비트겟', en: 'Bitget', mode: 'api' },
+  { key: 'mt5', ko: '메타트레이더', en: 'MetaTrader', mode: 'manual' },
+  { key: 'orangex', ko: '오렌지X', en: 'OrangeX', mode: 'manual' },
 ]
 
-export const daily = [
-  { day: '06/01', bitget: 42, mt5: 80, binance: -12, all: 110 },
-  { day: '06/02', bitget: -18, mt5: 45, binance: 11, all: 38 },
-  { day: '06/03', bitget: 66, mt5: 120, binance: 30, all: 216 },
-  { day: '06/04', bitget: 34, mt5: -70, binance: 18, all: -18 },
-  { day: '06/05', bitget: 92, mt5: 160, binance: 22, all: 274 },
-  { day: '06/06', bitget: -25, mt5: 60, binance: -8, all: 27 },
-  { day: '06/07', bitget: 84, mt5: 126, binance: -22, all: 188 }
+export const accounts: Account[] = [
+  { key: 'bitget', ko: '비트겟 API 계좌', en: 'Bitget API Account', mode: 'api', asset: 2380, today: 42, month: 318, trades: 48, winRate: 64 },
+  { key: 'mt5', ko: '메타트레이더 수동 계좌', en: 'MetaTrader Manual Account', mode: 'manual', asset: 5120, today: 126, month: 980, trades: 76, winRate: 71 },
+  { key: 'orangex', ko: '오렌지X 수동 계좌', en: 'OrangeX Manual Account', mode: 'manual', asset: 620, today: -18, month: 74, trades: 22, winRate: 59 },
 ]
 
-export const equity = [
-  { day: '1일', value: 10000 }, { day: '2일', value: 10110 }, { day: '3일', value: 10148 },
-  { day: '4일', value: 10364 }, { day: '5일', value: 10346 }, { day: '6일', value: 10620 },
-  { day: '7일', value: 10647 }, { day: '8일', value: 10835 }, { day: '9일', value: 11010 },
-  { day: '10일', value: 11290 }, { day: '11일', value: 11960 }, { day: '12일', value: 12340 }
-]
+export const equity = Array.from({ length: 90 }, (_, i) => {
+  const bitget = 1850 + i * 6 + Math.sin(i / 4) * 70 + (i > 58 ? 130 : 0)
+  const mt5 = 3900 + i * 18 + Math.sin(i / 6) * 130 + (i > 42 ? 310 : 0)
+  const orangex = 520 + i * 2 + Math.cos(i / 5) * 26
+  return {
+    day: `${i + 1}`,
+    bitget: Math.round(bitget),
+    mt5: Math.round(mt5),
+    orangex: Math.round(orangex),
+    all: Math.round(bitget + mt5 + orangex),
+  }
+})
+
+export const daily = Array.from({ length: 30 }, (_, i) => {
+  const bitget = Math.round(Math.sin(i / 2) * 28 + 18)
+  const mt5 = Math.round(Math.cos(i / 3) * 55 + 42)
+  const orangex = Math.round(Math.sin(i / 4) * 14 + 3)
+  return {
+    day: `${i + 1}`,
+    bitget,
+    mt5,
+    orangex,
+    all: bitget + mt5 + orangex,
+  }
+})
 
 export const monthly = [
-  { month: '1월', all: 420, bitget: 180, mt5: 260, binance: -20 },
-  { month: '2월', all: -140, bitget: -90, mt5: 40, binance: -90 },
-  { month: '3월', all: 870, bitget: 220, mt5: 560, binance: 90 },
-  { month: '4월', all: 540, bitget: 170, mt5: 310, binance: 60 },
-  { month: '5월', all: 1220, bitget: 360, mt5: 720, binance: 140 },
-  { month: '6월', all: 2100, bitget: 640, mt5: 1320, binance: 140 }
+  { month: '1월', bitget: 210, mt5: 420, orangex: 40, all: 670 },
+  { month: '2월', bitget: -90, mt5: 360, orangex: 25, all: 295 },
+  { month: '3월', bitget: 310, mt5: 510, orangex: 68, all: 888 },
+  { month: '4월', bitget: 180, mt5: 690, orangex: -34, all: 836 },
+  { month: '5월', bitget: 440, mt5: 980, orangex: 74, all: 1494 },
+  { month: '6월', bitget: 318, mt5: 980, orangex: 74, all: 1372 },
 ]
 
 export const trades = [
-  { exchange: 'bitget', market: 'BTCUSDT', side: 'Long', pnl: 32.4, roi: 4.2, time: '오늘 09:24', result: 'WIN' },
-  { exchange: 'mt5', market: 'XAUUSD', side: 'Short', pnl: 76.8, roi: 2.9, time: '오늘 11:18', result: 'WIN' },
-  { exchange: 'binance', market: 'ETHUSDT', side: 'Long', pnl: -22.1, roi: -1.8, time: '오늘 13:02', result: 'LOSS' },
-  { exchange: 'bitget', market: 'SOLUSDT', side: 'Short', pnl: 51.6, roi: 7.1, time: '어제 21:45', result: 'WIN' },
-  { exchange: 'mt5', market: 'XAUUSD', side: 'Long', pnl: -38.5, roi: -1.4, time: '어제 23:10', result: 'LOSS' },
-  { exchange: 'mt5', market: 'XAUUSD', side: 'Short', pnl: 88.2, roi: 3.7, time: '06/15 16:21', result: 'WIN' }
+  { exchange: 'bitget' as const, market: 'BTCUSDT', side: 'Long', time: '오늘 14:20', pnl: 36, result: 'WIN' },
+  { exchange: 'mt5' as const, market: 'XAUUSD', side: 'Buy', time: '오늘 13:45', pnl: 126, result: 'WIN' },
+  { exchange: 'orangex' as const, market: 'Auto Bot', side: 'Grid', time: '오늘 12:10', pnl: -18, result: 'LOSS' },
+  { exchange: 'bitget' as const, market: 'ETHUSDT', side: 'Short', time: '어제 23:18', pnl: -12, result: 'LOSS' },
+  { exchange: 'mt5' as const, market: 'XAUUSD', side: 'Sell', time: '어제 21:02', pnl: 48, result: 'WIN' },
+  { exchange: 'orangex' as const, market: 'Auto Bot', side: 'DCA', time: '어제 18:44', pnl: 22, result: 'WIN' },
 ]
