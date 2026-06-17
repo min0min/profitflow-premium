@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { accounts, daily, equity, exchanges, monthly, trades, type ExchangeKey } from '@/lib/data'
+import { accounts, daily, equity, exchanges, monthly, trades, type ExchangeKey } from '../lib/data'
 
 const money = (n: number) => `${n < 0 ? '-' : ''}$${Math.abs(n).toLocaleString()}`
 const signed = (n: number) => `${n >= 0 ? '+' : '-'}$${Math.abs(n).toLocaleString()}`
